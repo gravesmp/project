@@ -1,0 +1,191 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  sync-runner-vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    env:
+      TS_HOSTNAME: vm-1
+      TARGET_DURATION: 21600   # 6 hours in seconds
+      BACKUP_INTERVAL: 120     # backup every 120 seconds (2 minutes)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install required packages on runner
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y unzip zip git curl
+
+      - name: Change hostname to vm-1
+        run: |
+          sudo hostnamectl set-hostname vm-1
+          echo "vm-1" | sudo tee /etc/hostname > /dev/null
+          sudo sed -i 's/127.0.1.1\s*.*/127.0.1.1\tvm-1/' /etc/hosts || true
+          sudo systemctl restart systemd-hostnamed || true
+
+      - name: Install and configure OpenSSH Server
+        run: |
+          sudo apt-get install -y openssh-server
+          sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo systemctl enable --now ssh || sudo systemctl enable --now sshd || true
+          sudo systemctl restart ssh || sudo systemctl restart sshd || true
+
+      - name: Set root password from secret
+        run: |
+          echo "root:${{ secrets.PASSWORD }}" | sudo chpasswd
+
+      - name: Install Tailscale and bring up with fixed hostname
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo systemctl enable --now tailscaled
+          sudo tailscale up --authkey=${TS_AUTHKEY} --hostname=${TS_HOSTNAME} --accept-routes --accept-dns --timeout=60s || true
+          for i in $(seq 1 20); do
+            TS_IP=$(sudo tailscale ip -4 2>/dev/null || true)
+            if [ -n "$TS_IP" ]; then
+              echo "TS_IP=$TS_IP" >> $GITHUB_ENV
+              break
+            fi
+            sleep 2
+          done
+          echo "TAILSCALE_HOSTNAME=${TS_HOSTNAME}.tailscale" >> $GITHUB_ENV
+          echo "::notice::Tailscale host: ${TS_HOSTNAME}.tailscale"
+
+      - name: Import container.zip from repo into /root/container (if present)
+        run: |
+          sudo mkdir -p /root/container
+          if [ -f ./container.zip ]; then
+            echo "Found container.zip in repo — copying to /root/container and extracting."
+            sudo cp ./container.zip /root/container/container.zip
+            sudo chown root:root /root/container/container.zip
+            sudo unzip -o /root/container/container.zip -d /root/container || true
+          else
+            echo "No container.zip in repo; leaving /root/container as-is."
+          fi
+
+      - name: Ensure /root/container exists and is owned by root
+        run: |
+          sudo mkdir -p /root/container
+          sudo chown -R root:root /root/container
+
+      - name: Prepare git for automated commits
+        env:
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Ensure we have a clean working tree to start
+          git reset --hard || true
+
+      - name: Backup loop: create snapshot every 2 minutes and push if changed
+        env:
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+          TARGET_DURATION: ${{ env.TARGET_DURATION }}
+          BACKUP_INTERVAL: ${{ env.BACKUP_INTERVAL }}
+        run: |
+          START_TIME=$(date +%s)
+          echo "Backup loop started at ${START_TIME}. Will run for up to ${TARGET_DURATION}s, backing up every ${BACKUP_INTERVAL}s."
+
+          # helper to compute sha256 of a file (returns empty if file missing)
+          sha256_of() {
+            if [ -f "$1" ]; then
+              sha256sum "$1" | awk '{print $1}'
+            else
+              echo ""
+            fi
+          }
+
+          LAST_SHA=""
+          # If a container.zip already exists in repo workspace, record its sha to avoid immediate duplicate commit
+          if [ -f ./container.zip ]; then
+            LAST_SHA=$(sha256_of ./container.zip)
+            echo "Initial workspace container.zip sha: ${LAST_SHA}"
+          fi
+
+          while true; do
+            NOW_TIME=$(date +%s)
+            ELAPSED=$((NOW_TIME - START_TIME))
+            if [ $ELAPSED -ge $TARGET_DURATION ]; then
+              echo "Target duration reached (${ELAPSED}s >= ${TARGET_DURATION}s). Exiting backup loop."
+              break
+            fi
+
+            # Create a fresh zip of /root/container as root
+            sudo rm -f /root/container.zip || true
+            sudo bash -lc "cd /root && zip -r /root/container.zip container" >/dev/null 2>&1 || true
+
+            # Compute sha of the newly created zip
+            NEW_SHA=$(sudo bash -lc "if [ -f /root/container.zip ]; then sha256sum /root/container.zip | awk '{print \$1}'; else echo ''; fi")
+            echo "New container.zip sha: ${NEW_SHA}"
+
+            # If zip exists and sha differs from last known, copy to workspace and commit
+            if [ -n "$NEW_SHA" ] && [ "$NEW_SHA" != "$LAST_SHA" ]; then
+              echo "Change detected; persisting container.zip to workspace and committing."
+              sudo cp /root/container.zip ./container.zip
+              sudo chown $USER:$USER ./container.zip || true
+
+              # Add and commit only if there are changes
+              git add container.zip
+              if git diff-index --quiet HEAD --; then
+                echo "No git changes detected after adding container.zip."
+              else
+                git commit -m "chore: periodic backup container.zip from vm-1 (sha: ${NEW_SHA})" || true
+                REPO_URL="https://x-access-token:${GIT_TOKEN}@github.com/${{ github.repository }}.git"
+                git push $REPO_URL HEAD:${{ github.ref }} || true
+                echo "Pushed updated container.zip to repository."
+              fi
+
+              LAST_SHA="$NEW_SHA"
+            else
+              echo "No change detected (or zip missing)."
+            fi
+
+            # Sleep until next interval, but ensure we don't overshoot TARGET_DURATION
+            REMAINING=$((TARGET_DURATION - ELAPSED))
+            if [ $REMAINING -le 0 ]; then
+              echo "No remaining time; exiting."
+              break
+            fi
+
+            SLEEP_TIME=$BACKUP_INTERVAL
+            if [ $REMAINING -lt $SLEEP_TIME ]; then
+              SLEEP_TIME=$REMAINING
+            fi
+
+            sleep $SLEEP_TIME
+          done
+
+      - name: Final snapshot before exit (safety)
+        env:
+          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
+        run: |
+          # Ensure a final snapshot is taken at the end if it differs from last committed
+          sudo rm -f /root/container.zip || true
+          sudo bash -lc "cd /root && zip -r /root/container.zip container" >/dev/null 2>&1 || true
+          if [ -f /root/container.zip ]; then
+            sudo cp /root/container.zip ./container.zip
+            sudo chown $USER:$USER ./container.zip || true
+            git add container.zip
+            if git diff-index --quiet HEAD --; then
+              echo "No final changes to commit."
+            else
+              git commit -m "chore: final backup container.zip from vm-1 before job end" || true
+              REPO_URL="https://x-access-token:${GIT_TOKEN}@github.com/${{ github.repository }}.git"
+              git push $REPO_URL HEAD:${{ github.ref }} || true
+              echo "Final container.zip pushed to repository."
+            fi
+          else
+            echo "Final container.zip not found; skipping final commit."
+          fi
