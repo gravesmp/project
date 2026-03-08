@@ -5,6 +5,10 @@ on:
   push:
     branches: [ main ]
 
+concurrency:
+  group: runner-vm
+  cancel-in-progress: true
+
 jobs:
   runner-vm:
 
@@ -77,15 +81,12 @@ jobs:
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo systemctl enable --now tailscaled
-
           sudo tailscale up \
             --authkey=$TS_AUTHKEY \
             --hostname=$TS_HOSTNAME \
             --accept-routes \
             --accept-dns
-
           TS_IP=$(sudo tailscale ip -4)
-
           echo "TS_IP=$TS_IP" >> $GITHUB_ENV
           echo "::notice::Tailscale IP = $TS_IP"
 
@@ -106,10 +107,8 @@ jobs:
         run: |
           if [ -f container.zip ]; then
             echo "Restoring container.zip"
-
             sudo cp container.zip /root/container.zip
             sudo unzip -o /root/container.zip -d /root/
-
           else
             echo "No container.zip found"
           fi
@@ -131,19 +130,13 @@ jobs:
         env:
           GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
         run: |
-
           set -e
 
           START_TIME=$(date +%s)
           LAST_SHA=""
 
-          sha256_of () {
-            sha256sum "$1" | awk '{print $1}'
-          }
-
           while true
           do
-
             NOW=$(date +%s)
             ELAPSED=$((NOW - START_TIME))
 
@@ -160,7 +153,6 @@ jobs:
             NEW_SHA=$(sudo sha256sum /root/container.zip | awk '{print $1}')
 
             if [ "$NEW_SHA" != "$LAST_SHA" ]; then
-
               echo "Change detected"
 
               sudo cp /root/container.zip ./container.zip
@@ -170,25 +162,18 @@ jobs:
               git add container.zip
 
               if ! git diff-index --quiet HEAD; then
-
                 git commit -m "backup snapshot $NEW_SHA"
-
                 git push \
                 https://x-access-token:${GIT_TOKEN}@github.com/${{ github.repository }}.git \
                 HEAD:main
-
               fi
 
               LAST_SHA=$NEW_SHA
-
             else
-
               echo "No changes"
-
             fi
 
             sleep $BACKUP_INTERVAL
-
           done
 
 #################################################
@@ -199,7 +184,6 @@ jobs:
         env:
           GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
         run: |
-
           echo "Creating final snapshot"
 
           sudo rm -f /root/container.zip
@@ -212,11 +196,8 @@ jobs:
           git add container.zip
 
           if ! git diff-index --quiet HEAD; then
-
             git commit -m "final container backup"
-
             git push \
             https://x-access-token:${GIT_TOKEN}@github.com/${{ github.repository }}.git \
             HEAD:main
-
           fi
