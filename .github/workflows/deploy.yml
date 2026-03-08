@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  deploy-vm:                      # Job name uses "deploy"
+  deploy-vm:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -95,13 +95,13 @@ jobs:
           sudo mkdir -p /root/container
           echo "alias c='cd /root/container'" | sudo tee -a /root/.bashrc > /dev/null
 
-          for i in {1..720}; do
+          while true; do
             # Fetch latest changes from the same branch
             git fetch origin ${{ github.ref }} 2>&1 || echo "Fetch failed, continuing..."
             git reset --hard FETCH_HEAD 2>&1 || echo "Reset failed, continuing..."
 
             if [ -d "container" ]; then
-              # Copy/update files from repo's container/ to /root/container (no --delete, so extra files in /root/container are kept)
+              # Copy/update files from repo's container/ to /root/container (no --delete)
               sudo rsync -a container/ /root/container/
 
               if [ -f "modules.txt" ]; then
@@ -116,5 +116,5 @@ jobs:
               fi
             fi
 
-            sleep 30
+            sleep 10
           done
