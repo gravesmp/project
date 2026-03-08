@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= appName %></title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex items-center justify-center font-sans antialiased">
+
+    <!-- Card Container -->
+    <div class="bg-gray-800 p-8 rounded-2xl shadow-2xl max-w-md w-full mx-4 border border-gray-700 text-center relative overflow-hidden">
+        
+        <!-- Decorative Top Bar -->
+        <div class="absolute top-0 left-0 w-full h-2 bg-indigo-500"></div>
+
+        <% if (!user) { %>
+            <!-- LOGGED OUT VIEW -->
+            <div class="mb-8 mt-4">
+                <i class="fa-brands fa-discord text-7xl text-indigo-500 mb-6 drop-shadow-lg"></i>
+                <h1 class="text-3xl font-extrabold mb-2 tracking-tight">Welcome to <%= appName %></h1>
+                <p class="text-gray-400">Please sign in with your Discord account to continue.</p>
+            </div>
+            
+            <a href="/auth/discord" class="group flex items-center justify-center w-full bg-[#5865F2] hover:bg-[#4752C4] text-white font-semibold py-3.5 px-6 rounded-xl transition duration-300 ease-in-out shadow-lg hover:shadow-indigo-500/30 transform hover:-translate-y-0.5">
+                <i class="fa-brands fa-discord mr-3 text-xl group-hover:scale-110 transition duration-300"></i>
+                Login with Discord
+            </a>
+            
+        <% } else { %>
+            <!-- LOGGED IN VIEW -->
+            <div class="mb-6 mt-2">
+                <% if (user.avatar) { %>
+                    <div class="relative inline-block">
+                        <img src="https://cdn.discordapp.com/avatars/<%= user.id %>/<%= user.avatar %>.png?size=1024" alt="Avatar" class="w-28 h-28 rounded-full mx-auto border-4 border-[#5865F2] mb-4 shadow-xl object-cover">
+                        <div class="absolute bottom-4 right-1 w-5 h-5 bg-green-500 border-4 border-gray-800 rounded-full"></div>
+                    </div>
+                <% } else { %>
+                    <div class="w-28 h-28 rounded-full mx-auto border-4 border-[#5865F2] mb-4 flex items-center justify-center bg-gray-700 text-4xl font-bold shadow-xl">
+                        <%= user.username.charAt(0).toUpperCase() %>
+                    </div>
+                <% } %>
+                
+                <h1 class="text-3xl font-bold tracking-tight">
+                    Hello, <%= user.global_name || user.username %>!
+                </h1>
+                <p class="text-indigo-400 mt-1 font-medium"><%= user.email %></p>
+            </div>
+
+            <!-- User Data Display -->
+            <div class="bg-gray-900/50 rounded-xl p-5 mb-8 text-left text-sm text-gray-300 border border-gray-700/50 shadow-inner">
+                <div class="mb-3 flex justify-between items-center border-b border-gray-700 pb-2">
+                    <span class="text-gray-500 uppercase font-semibold text-xs tracking-wider">Username</span>
+                    <span class="font-mono bg-gray-800 px-2 py-1 rounded text-gray-200"><%= user.username %></span>
+                </div>
+                <div class="flex justify-between items-center pt-1">
+                    <span class="text-gray-500 uppercase font-semibold text-xs tracking-wider">User ID</span>
+                    <span class="font-mono bg-gray-800 px-2 py-1 rounded text-gray-200"><%= user.id %></span>
+                </div>
+            </div>
+
+            <a href="/logout" class="block w-full bg-red-500/10 hover:bg-red-500 hover:text-white text-red-500 border border-red-500/50 font-semibold py-3 px-6 rounded-xl transition duration-300 ease-in-out shadow-lg">
+                <i class="fa-solid fa-arrow-right-from-bracket mr-2"></i>
+                Log Out
+            </a>
+        <% } %>
+
+    </div>
+</body>
+</html>
