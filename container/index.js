@@ -45,5 +45,7 @@ app.use('/', homeRoutes);
 
 // Start Server
 app.listen(config.port, () => {
-    console.log(`✅ ${config.appName} is running on http://localhost:${config.port}`);
+    // Use the URL from config.json, otherwise fallback to localhost
+    const displayUrl = config.url || `http://localhost:${config.port}`;
+    console.log(`✅ ${config.appName} is running on ${displayUrl}`);
 });
