@@ -89,7 +89,7 @@ jobs:
           # Ensure we have a clean working tree to start
           git reset --hard || true
 
-      - name: Backup loop: create snapshot every 2 minutes and push if changed
+      - name: Backup loop create snapshot every 2 minutes and push if changed
         env:
           GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
           TARGET_DURATION: ${{ env.TARGET_DURATION }}
