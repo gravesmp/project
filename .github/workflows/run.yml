@@ -1,0 +1,72 @@
+name: run
+
+on:
+  push:
+    branches:
+      - main # Change this if your default branch is different (e.g., 'master')
+  workflow_dispatch:
+
+# Ensures strictly ONE runner exists at all times.
+# If you push updates, the new job will just wait while the OG runner pulls the data itself.
+concurrency:
+  group: single-vm-runner
+  cancel-in-progress: false
+
+jobs:
+  persistent-vm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360 # 6 hours max limit
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Set Hostname to vm-1
+        run: |
+          sudo hostnamectl set-hostname vm-1
+          echo "127.0.0.1 vm-1" | sudo tee -a /etc/hosts
+
+      - name: Enable Root SSH and Set Password
+        run: |
+          # Set root password using GitHub Secret
+          echo "root:${{ secrets.PASSWORD }}" | sudo chpasswd
+
+          # Modify SSH config for root login and password auth
+          sudo sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sudo sed -i 's/^KbdInteractiveAuthentication.*/KbdInteractiveAuthentication yes/' /etc/ssh/sshd_config
+
+          # Restart SSH daemon
+          sudo systemctl restart sshd
+
+      - name: Install and Setup Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey="${{ secrets.TAILSCALE_AUTHKEY }}" --hostname="vm-1"
+
+      - name: Live Sync 'container' to /root/container & Keep Alive
+        run: |
+          echo "Setup complete! SSH via Tailscale: ssh root@vm-1"
+          echo "Starting 6-hour auto-sync loop..."
+          
+          # Create the destination directory
+          sudo mkdir -p /root/container
+
+          # Loop continuously for ~6 hours (720 iterations * 30 seconds)
+          for i in {1..720}; do
+            # 1. Fetch the exact state of your GitHub repository
+            git fetch origin ${{ github.ref_name }}
+            git reset --hard origin/${{ github.ref_name }} > /dev/null 2>&1
+            
+            # 2. Swap/Sync the 'container' folder to /root/container
+            if [ -d "container" ]; then
+              # rsync -a --delete completely mirrors the folder. 
+              # It replaces modified files and deletes files that no longer exist in the repo.
+              sudo rsync -a --delete container/ /root/container/
+            fi
+            
+            # 3. Wait 30 seconds before pulling again
+            sleep 30
+          done
