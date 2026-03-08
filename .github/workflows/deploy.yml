@@ -1,70 +1,62 @@
-name: deploy
+name: Runner VM
 
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths:
+      - 'container/**'
 
-concurrency:
-  group: runner-vm
-  cancel-in-progress: true
+permissions:
+  contents: read
 
 jobs:
-  runner-vm:
-
+  vm:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     env:
-      TS_HOSTNAME: vm-1
-      TARGET_DURATION: 21600
-      BACKUP_INTERVAL: 120
-
-#################################################
-# BLOCK 1 — CHECKOUT REPOSITORY
-#################################################
+      HOSTNAME: runner-vm
+      SYNC_INTERVAL: 60
 
     steps:
+
+#################################################
+# CHECKOUT REPOSITORY
+#################################################
 
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
 #################################################
-# BLOCK 2 — INSTALL REQUIRED PACKAGES
+# INSTALL PACKAGES
 #################################################
 
-      - name: Install system packages
+      - name: Install packages
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            curl \
-            zip \
-            unzip \
-            openssh-server
+          sudo apt update
+          sudo apt install -y git curl rsync openssh-server
 
 #################################################
-# BLOCK 3 — CONFIGURE HOSTNAME
+# SET HOSTNAME
 #################################################
 
-      - name: Set hostname
+      - name: Configure hostname
         run: |
-          sudo hostnamectl set-hostname $TS_HOSTNAME
-          echo "$TS_HOSTNAME" | sudo tee /etc/hostname
-          sudo sed -i "s/127.0.1.1.*/127.0.1.1 $TS_HOSTNAME/" /etc/hosts || true
+          sudo hostnamectl set-hostname $HOSTNAME
+          echo "$HOSTNAME" | sudo tee /etc/hostname
 
 #################################################
-# BLOCK 4 — ENABLE SSH ACCESS
+# ENABLE SSH
 #################################################
 
-      - name: Configure SSH server
+      - name: Enable SSH
         run: |
           sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
           sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
-          sudo systemctl enable --now ssh
+          sudo systemctl enable ssh
           sudo systemctl restart ssh
 
       - name: Set root password
@@ -72,132 +64,62 @@ jobs:
           echo "root:${{ secrets.PASSWORD }}" | sudo chpasswd
 
 #################################################
-# BLOCK 5 — INSTALL TAILSCALE
+# INSTALL TAILSCALE
 #################################################
 
-      - name: Install and connect Tailscale
-        env:
-          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
+      - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
           sudo systemctl enable --now tailscaled
+
+      - name: Connect Tailscale
+        run: |
           sudo tailscale up \
-            --authkey=$TS_AUTHKEY \
-            --hostname=$TS_HOSTNAME \
+            --authkey=${{ secrets.TAILSCALE_AUTHKEY }} \
+            --hostname=$HOSTNAME \
             --accept-routes \
             --accept-dns
-          TS_IP=$(sudo tailscale ip -4)
-          echo "TS_IP=$TS_IP" >> $GITHUB_ENV
-          echo "::notice::Tailscale IP = $TS_IP"
+
+          echo "Tailscale IP:"
+          sudo tailscale ip -4
 
 #################################################
-# BLOCK 6 — PREPARE CONTAINER DIRECTORY
+# CREATE CONTAINER FOLDER
 #################################################
 
-      - name: Prepare container directory
+      - name: Create container folder
         run: |
           sudo mkdir -p /root/container
-          sudo chown -R root:root /root/container
 
 #################################################
-# BLOCK 7 — RESTORE CONTAINER FROM REPO
+# INITIAL IMPORT FROM REPO
 #################################################
 
-      - name: Restore container.zip
+      - name: Import container from repo
         run: |
-          if [ -f container.zip ]; then
-            echo "Restoring container.zip"
-            sudo cp container.zip /root/container.zip
-            sudo unzip -o /root/container.zip -d /root/
+          if [ -d container ]; then
+            echo "Importing repo container → /root/container"
+            sudo rsync -av container/ /root/container/
           else
-            echo "No container.zip found"
+            echo "No container folder found in repo"
           fi
 
 #################################################
-# BLOCK 8 — CONFIGURE GIT
+# AUTO SYNC LOOP
 #################################################
 
-      - name: Configure Git
+      - name: Start repo sync loop
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "actions@github.com"
-
-#################################################
-# BLOCK 9 — BACKUP SYSTEM
-#################################################
-
-      - name: Run backup loop
-        env:
-          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
-        run: |
-          set -e
-
-          START_TIME=$(date +%s)
-          LAST_SHA=""
-
           while true
           do
-            NOW=$(date +%s)
-            ELAPSED=$((NOW - START_TIME))
+            echo "Checking for repo updates..."
 
-            if [ $ELAPSED -ge $TARGET_DURATION ]; then
-              echo "Max runtime reached"
-              break
+            git pull origin main || true
+
+            if [ -d container ]; then
+              echo "Syncing container files..."
+              sudo rsync -av --delete container/ /root/container/
             fi
 
-            echo "Creating backup..."
-
-            sudo rm -f /root/container.zip || true
-            sudo bash -c "cd /root && zip -rq container.zip container"
-
-            NEW_SHA=$(sudo sha256sum /root/container.zip | awk '{print $1}')
-
-            if [ "$NEW_SHA" != "$LAST_SHA" ]; then
-              echo "Change detected"
-
-              sudo cp /root/container.zip ./container.zip
-              sudo chown $USER:$USER container.zip
-
-              git pull origin main --rebase || true
-              git add container.zip
-
-              if ! git diff-index --quiet HEAD; then
-                git commit -m "backup snapshot $NEW_SHA"
-                git push \
-                https://x-access-token:${GIT_TOKEN}@github.com/${{ github.repository }}.git \
-                HEAD:main
-              fi
-
-              LAST_SHA=$NEW_SHA
-            else
-              echo "No changes"
-            fi
-
-            sleep $BACKUP_INTERVAL
+            sleep $SYNC_INTERVAL
           done
-
-#################################################
-# BLOCK 10 — FINAL BACKUP
-#################################################
-
-      - name: Final snapshot
-        env:
-          GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
-        run: |
-          echo "Creating final snapshot"
-
-          sudo rm -f /root/container.zip
-          sudo bash -c "cd /root && zip -rq container.zip container"
-
-          sudo cp /root/container.zip ./container.zip
-          sudo chown $USER:$USER container.zip
-
-          git pull origin main --rebase || true
-          git add container.zip
-
-          if ! git diff-index --quiet HEAD; then
-            git commit -m "final container backup"
-            git push \
-            https://x-access-token:${GIT_TOKEN}@github.com/${{ github.repository }}.git \
-            HEAD:main
-          fi
