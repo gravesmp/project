@@ -8,7 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  persistent-vm:
+  deploy-vm:                      # Job name uses "deploy"
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
@@ -101,7 +101,8 @@ jobs:
             git reset --hard FETCH_HEAD 2>&1 || echo "Reset failed, continuing..."
 
             if [ -d "container" ]; then
-              sudo rsync -a --delete container/ /root/container/
+              # Copy/update files from repo's container/ to /root/container (no --delete, so extra files in /root/container are kept)
+              sudo rsync -a container/ /root/container/
 
               if [ -f "modules.txt" ]; then
                 # Read modules, ignore empty lines
@@ -109,7 +110,7 @@ jobs:
                 if [ -n "$MODULE_LIST" ]; then
                   (
                     cd /root/container/
-                    npm install --silent $MODULE_LIST
+                    sudo npm install --silent $MODULE_LIST
                   )
                 fi
               fi
