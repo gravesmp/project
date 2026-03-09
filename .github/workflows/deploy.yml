@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: deploy-vm
+  group: deploy
   cancel-in-progress: false
 
 jobs:
@@ -22,9 +22,9 @@ jobs:
           ref: ${{ github.ref }}
 
       # ------------------------------------------------------------
-      # 2. INITIAL SYNC:
+      # 2. SYNC FILE FROM REPO
       # ------------------------------------------------------------
-      - name: Fetch data from repo to /root/container/
+      - name: Sync files from repo to /root/container/
         run: |
           if [ -d "container" ]; then
             sudo mkdir -p /root/container
@@ -37,7 +37,7 @@ jobs:
       # ------------------------------------------------------------
       # 3. SET HOSTNAME
       # ------------------------------------------------------------
-      - name: Set hostname
+      - name: Set hostname(vm-1)
         run: |
           sudo hostnamectl set-hostname vm-1
           echo "127.0.0.1 vm-1" | sudo tee -a /etc/hosts
