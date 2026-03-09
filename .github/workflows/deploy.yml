@@ -1,3 +1,4 @@
+```yaml
 name: deploy
 
 on:
@@ -22,16 +23,18 @@ jobs:
           ref: ${{ github.ref }}
 
       # ------------------------------------------------------------
-      # 2. SYNC FILE FROM REPO
+      # 2. SYNC FILE FROM REPO (always ensure target directory exists)
       # ------------------------------------------------------------
       - name: Sync files from repo to /root/container/
         run: |
+          # Always create the target directory
+          sudo mkdir -p /root/container
+          # Sync if the source folder exists in the repository
           if [ -d "container" ]; then
-            sudo mkdir -p /root/container
             sudo rsync -a container/ /root/container/
             echo "Initial sync completed."
           else
-            echo "Warning: 'container' folder not found in repository."
+            echo "Warning: 'container' folder not found in repository. Target directory created empty."
           fi
 
       # ------------------------------------------------------------
@@ -125,16 +128,33 @@ jobs:
           sudo apt-get install -y nodejs
 
       # ------------------------------------------------------------
-      # 9. CREATE A ALIAS "c"
+      # 9. CREATE ALIASES
       # ------------------------------------------------------------
-      - name: Prepare application directory and add 'c' alias
+      - name: Create useful aliases
         run: |
-          # Directory already exists from step 2, but ensure it's there
-          sudo mkdir -p /root/container
+          # Alias 'c' to cd into the container directory
           echo "alias c='cd /root/container'" | sudo tee -a /root/.bashrc > /dev/null
+          # Alias 's' to kill all node processes
+          echo "alias s='sudo pkill node'" | sudo tee -a /root/.bashrc > /dev/null
 
       # ------------------------------------------------------------
-      # 10. LIVE FILE SYNC AND KEEP-ALIVE (6 hours)
+      # 10. INSTALL DEPENDENCIES AND START APPLICATION
+      # ------------------------------------------------------------
+      - name: Install dependencies and start app
+        run: |
+          cd /root/container
+          if [ -f package.json ]; then
+            sudo npm install
+            echo "Starting application with 'node .' in background..."
+            # Run node in background and disown so it survives the step
+            sudo node . &
+            disown
+          else
+            echo "No package.json found, skipping npm install and app start."
+          fi
+
+      # ------------------------------------------------------------
+      # 11. LIVE FILE SYNC AND KEEP-ALIVE (6 hours)
       # ------------------------------------------------------------
       - name: Live file sync and keep-alive
         run: |
