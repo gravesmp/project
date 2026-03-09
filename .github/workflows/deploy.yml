@@ -127,7 +127,7 @@ jobs:
           sudo apt-get install -y nodejs
 
       # ------------------------------------------------------------
-      # 9. CREATE ALIASES
+      # 9. CREATE USEFUL ALIASES
       # ------------------------------------------------------------
       - name: Create useful aliases
         run: |
@@ -137,19 +137,16 @@ jobs:
           echo "alias s='sudo pkill node'" | sudo tee -a /root/.bashrc > /dev/null
 
       # ------------------------------------------------------------
-      # 10. INSTALL DEPENDENCIES AND START APPLICATION
+      # 10. INSTALL DEPENDENCIES
       # ------------------------------------------------------------
-      - name: Install dependencies and start app
+      - name: Install dependencies
         run: |
-          cd /root/container
-          if [ -f package.json ]; then
-            sudo npm install
-            echo "Starting application with 'node .' in background..."
-            # Run node in background and disown so it survives the step
-            sudo node . &
-            disown
+          if [ -f /root/container/package.json ]; then
+            # Use sudo to change to the container directory and run npm install
+            sudo bash -c "cd /root/container && npm install"
+            echo "Dependencies installed."
           else
-            echo "No package.json found, skipping npm install and app start."
+            echo "No package.json found, skipping npm install."
           fi
 
       # ------------------------------------------------------------
@@ -157,20 +154,20 @@ jobs:
       # ------------------------------------------------------------
       - name: Live file sync and keep-alive
         run: |
-          # -------- BACKGROUND LIVE SYNC (only files) --------
+          # -------- BACKGROUND LIVE SYNC --------
           (
             while true; do
               cd "$GITHUB_WORKSPACE"
-              git fetch origin ${{ github.ref }} 2>&1 || echo "Fetch failed, continuing..."
-              git reset --hard FETCH_HEAD 2>&1 || echo "Reset failed, continuing..."
+              git fetch origin ${{ github.ref }} 2>&1 || echo "Fetch failed"
+              git reset --hard FETCH_HEAD 2>&1 || echo "Reset failed"
 
               if [ -d "container" ]; then
-                # Copy updated files to /root/container (no --delete)
                 sudo rsync -a container/ /root/container/
               fi
+
               sleep 10
             done
           ) &
 
-          # -------- KEEP JOB ALIVE FOR 6 HOURS --------
+          # -------- KEEP JOB ALIVE --------
           sleep 360m
